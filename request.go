@@ -149,7 +149,7 @@ func (r *requestImpl[T]) Get(ctx context.Context, u string, params ...any) (T, e
 	}
 
 	var err error
-	r.url, err = url.Parse(u)
+	err = r.loadURL(u)
 	if err != nil {
 		return zero, err
 	}
@@ -212,7 +212,7 @@ func (r *requestImpl[T]) Post(ctx context.Context, u string, params any, attachm
 	}
 
 	var err error
-	r.url, err = url.Parse(u)
+	err = r.loadURL(u)
 	if err != nil {
 		return zero, err
 	}
@@ -243,7 +243,7 @@ func (r *requestImpl[T]) PostJSON(ctx context.Context, u string, params any) (T,
 	r.headers.Set("Cache-Control", "no-cache")
 	r.body = &buf
 
-	r.url, err = url.Parse(u)
+	err = r.loadURL(u)
 	if err != nil {
 		return zero, err
 	}
@@ -269,14 +269,17 @@ func (r *requestImpl[T]) Delete(ctx context.Context) (T, error) {
 	panic("implement me")
 }
 
-// parseURL URLを分解して保持
-func (r *requestImpl[T]) parseURL(s string) error {
+// loadURL URLを分解して保持
+func (r *requestImpl[T]) loadURL(s string) error {
 	u, err := url.Parse(s)
 	if err != nil {
 		return err
 	}
 	r.url = u
 
+	if r.values == nil {
+		r.values = make(url.Values)
+	}
 	for k, v := range r.url.Query() {
 		for _, val := range v {
 			r.values.Add(k, val)
