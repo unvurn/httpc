@@ -20,7 +20,8 @@ import (
 type Request[T any] interface {
 	HTTPClient(c *http.Client) Request[T]                                                        // Set the HTTP client to use for requests
 	Method(m string) Request[T]                                                                  // Set the HTTP method (GET, POST, etc.)
-	Headers(headers ...any) Request[T]                                                           // Set headers for the request
+	Headers(headers any) Request[T]                                                              // Set headers for the request
+	Header(key, value string) Request[T]                                                         // Set headers for the request
 	Query(params ...any) Request[T]                                                              // Set query parameters for the request
 	Get(ctx context.Context, u string, params ...any) (T, error)                                 // Execute a GET request
 	Post(ctx context.Context, u string, params any, attachments ...MultipartFormData) (T, error) // Execute a POST request
@@ -85,39 +86,36 @@ func (r *requestImpl[T]) Method(m string) Request[T] {
 }
 
 // Headers HTTPリクエストのヘッダーを設定
-func (r *requestImpl[T]) Headers(headers ...any) Request[T] {
-	if len(headers) == 1 {
-		if h, ok := headers[0].(http.Header); ok {
-			if r.headers == nil {
-				r.headers = h
-			} else {
-				for key, values := range h {
-					for _, value := range values {
-						r.headers.Add(key, value)
-					}
+func (r *requestImpl[T]) Headers(headers any) Request[T] {
+	if h, ok := headers.(http.Header); ok {
+		if r.headers == nil {
+			r.headers = h
+		} else {
+			for key, values := range h {
+				for _, value := range values {
+					r.headers.Add(key, value)
 				}
 			}
-		} else if h, ok := headers[0].(map[string]string); ok {
-			if r.headers == nil {
-				r.headers = make(http.Header)
-			}
-			for key, value := range h {
-				r.headers.Add(key, value)
-			}
-		} else {
-			panic("invalid header type, expected http.Headers")
 		}
-	} else if len(headers) == 2 {
-		key := headers[0].(string)
-		value := headers[1].(string)
-
+	} else if h, ok := headers.(map[string]string); ok {
 		if r.headers == nil {
 			r.headers = make(http.Header)
 		}
-		r.headers.Add(key, value)
+		for key, value := range h {
+			r.headers.Add(key, value)
+		}
 	} else {
-		panic("invalid number of parameters for Headers method, expected 1 or 2")
+		panic("invalid header type, expected http.Headers")
 	}
+	return r
+}
+
+// Header HTTPリクエストのヘッダーを設定(key, valueによるstringペア)
+func (r *requestImpl[T]) Header(key, value string) Request[T] {
+	if r.headers == nil {
+		r.headers = make(http.Header)
+	}
+	r.headers.Add(key, value)
 	return r
 }
 
