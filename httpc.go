@@ -4,25 +4,19 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 )
 
 // HTTPレスポンスを処理するためのレスポンダー
 //
 // ただし何も変換せず、[]byte型のまま返します。
-var defaultResponders = []*ResponderFunc[[]byte]{
-	{
-		Condition: func(res *http.Response) bool {
-			return res.StatusCode == http.StatusOK
-		},
-		Responder: func(res *http.Response) ([]byte, error) {
-			defer func() { _ = res.Body.Close() }()
-			data, err := io.ReadAll(res.Body)
-			if err != nil {
-				return nil, err
-			}
-			return data, nil
-		},
-	},
+var defaultResponders = func(res *http.Response) ([]byte, error) {
+	if res.StatusCode != http.StatusOK {
+		return nil, nil
+	}
+
+	defer func() { _ = res.Body.Close() }()
+	return io.ReadAll(res.Body)
 }
 
 // NewRequest はHTTPリクエストを生成
@@ -39,7 +33,7 @@ func NewRequest() Request[[]byte] {
 //
 // note: build と Do はそれぞれ http.Request を引数とすることから [http] への依存を起こしています。
 // 当該依存関係が正当なものかの再検討により、今後この関数は再設計の対象となりえます。
-func do[T any](client *http.Client, req *http.Request, responders []*ResponderFunc[T]) (T, error) {
+func do[T any](client *http.Client, req *http.Request, responder ResponderFunc[T]) (T, error) {
 	var zero T
 
 	if client == nil {
@@ -51,14 +45,18 @@ func do[T any](client *http.Client, req *http.Request, responders []*ResponderFu
 		return zero, err
 	}
 
-	if res.StatusCode != http.StatusOK {
-		return zero, errors.New(res.Status)
+	response, err := responder(res)
+	if err != nil {
+		return zero, err
+	}
+	// if response != nil {
+	if !reflect.ValueOf(response).IsNil() && !reflect.ValueOf(response).IsZero() {
+		return response, nil
 	}
 
-	for _, responder := range responders {
-		if responder.Condition(res) {
-			return responder.Responder(res)
-		}
+	// as default error responder
+	if res.StatusCode != http.StatusOK {
+		return zero, NewError(res)
 	}
 
 	return zero, errors.New("no responders")

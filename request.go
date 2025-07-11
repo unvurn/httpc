@@ -21,7 +21,8 @@ type Request[T any] interface {
 	HTTPClient(c *http.Client) Request[T]                                                        // Set the HTTP client to use for requests
 	Method(m string) Request[T]                                                                  // Set the HTTP method (GET, POST, etc.)
 	Headers(headers any) Request[T]                                                              // Set headers for the request
-	Header(key, value string) Request[T]                                                         // Set headers for the request
+	Header(key, value string) Request[T]                                                         // Set header for the request
+	BasicAuth(username, password string) Request[T]                                              // Set Basic-Auth header for the request
 	Query(params ...any) Request[T]                                                              // Set query parameters for the request
 	Get(ctx context.Context, u string, params ...any) (T, error)                                 // Execute a GET request
 	Post(ctx context.Context, u string, params any, attachments ...MultipartFormData) (T, error) // Execute a POST request
@@ -34,17 +35,16 @@ type Request[T any] interface {
 //
 // Condition はHTTPレスポンス [*http.Response] がこの関数で定義された条件を満たすかどうかを判断します。
 // Responder はレスポンスの実際の処理を担当し、型Tの値を生成して返します。
-type ResponderFunc[T any] struct {
-	Condition func(res *http.Response) bool
-	Responder func(res *http.Response) (T, error)
-}
+type ResponderFunc[T any] func(*http.Response) (T, error)
+
+type ResponderOrNextFunc[T any] func(*http.Response, ResponderFunc[T]) (T, error)
 
 // NewRequestFunc Request[T]を生成する関数
 //
 // レスポンダー関数を指定してHTTPレスポンスボディを処理する方法を決定します。
-func NewRequestFunc[T *U, U any](responders []*ResponderFunc[T]) Request[T] {
+func NewRequestFunc[T *U, U any](responder ResponderFunc[T]) Request[T] {
 	return &requestImpl[T]{
-		responders: responders,
+		responder: responder,
 	}
 }
 
@@ -53,9 +53,9 @@ func NewRequestFunc[T *U, U any](responders []*ResponderFunc[T]) Request[T] {
 // レスポンダー関数を指定してHTTPレスポンスボディを処理する方法を決定します。
 // Tはスライス型である必要があります。
 // Deprecated: NewRequestFunc に統合予定。
-func NewRequestSliceFunc[T ~[]E, E any](responders []*ResponderFunc[T]) Request[T] {
+func NewRequestSliceFunc[T ~[]E, E any](responder ResponderFunc[T]) Request[T] {
 	return &requestImpl[T]{
-		responders: responders,
+		responder: responder,
 	}
 }
 
@@ -68,12 +68,19 @@ type requestImpl[T any] struct {
 	values            url.Values
 	headers           http.Header
 	body              io.Reader
-	responders        []*ResponderFunc[T]
+	responder         ResponderFunc[T]
 	basicAuthUsername string
 	basicAuthPassword string
 
 	// HttpClient HTTPクライアントを返すメソッド
 	httpClient *http.Client
+}
+
+func (r *requestImpl[T]) WithResponder(responder ResponderOrNextFunc[T]) Request[T] {
+	r.responder = func(resp *http.Response) (T, error) {
+		return responder(resp, r.responder)
+	}
+	return r
 }
 
 func (r *requestImpl[T]) HTTPClient(c *http.Client) Request[T] {
@@ -166,7 +173,7 @@ func (r *requestImpl[T]) Get(ctx context.Context, u string, params ...any) (T, e
 	if err != nil {
 		return zero, err
 	}
-	return do[T](r.httpClient, req, r.responders)
+	return do[T](r.httpClient, req, r.responder)
 }
 
 // Post HTTP POSTリクエストを実行
@@ -229,7 +236,7 @@ func (r *requestImpl[T]) Post(ctx context.Context, u string, params any, attachm
 	if err != nil {
 		return zero, err
 	}
-	return do[T](r.httpClient, req, r.responders)
+	return do[T](r.httpClient, req, r.responder)
 }
 
 // PostJSON JSONエンコードされたデータをリクエストボディに含むHTTP POSTリクエストを実行
@@ -260,7 +267,7 @@ func (r *requestImpl[T]) PostJSON(ctx context.Context, u string, params any) (T,
 	if err != nil {
 		return zero, err
 	}
-	return do[T](r.httpClient, req, r.responders)
+	return do[T](r.httpClient, req, r.responder)
 }
 
 // Put HTTP PUTリクエストを実行
