@@ -63,12 +63,14 @@ func NewRequestSliceFunc[T ~[]E, E any](responders []*ResponderFunc[T]) Request[
 //
 // Tはレスポンスの型を表します。
 type requestImpl[T any] struct {
-	method     string
-	url        *url.URL
-	values     url.Values
-	headers    http.Header
-	body       io.Reader
-	responders []*ResponderFunc[T]
+	method            string
+	url               *url.URL
+	values            url.Values
+	headers           http.Header
+	body              io.Reader
+	responders        []*ResponderFunc[T]
+	basicAuthUsername string
+	basicAuthPassword string
 
 	// HttpClient HTTPクライアントを返すメソッド
 	httpClient *http.Client
@@ -116,6 +118,12 @@ func (r *requestImpl[T]) Header(key, value string) Request[T] {
 		r.headers = make(http.Header)
 	}
 	r.headers.Add(key, value)
+	return r
+}
+
+func (r *requestImpl[T]) BasicAuth(username, password string) Request[T] {
+	r.basicAuthUsername = username
+	r.basicAuthPassword = password
 	return r
 }
 
@@ -303,5 +311,8 @@ func (r *requestImpl[T]) build(ctx context.Context) (*http.Request, error) {
 	}
 
 	req.Header = r.headers
+	if r.basicAuthUsername != "" && r.basicAuthPassword != "" {
+		req.SetBasicAuth(r.basicAuthUsername, r.basicAuthPassword)
+	}
 	return req, nil
 }
