@@ -2,29 +2,9 @@ package httpc
 
 import (
 	"errors"
-	"io"
 	"net/http"
 	"reflect"
 )
-
-// HTTPレスポンスを処理するためのレスポンダー
-//
-// ただし何も変換せず、[]byte型のまま返します。
-var defaultResponders = func(res *http.Response) ([]byte, error) {
-	if res.StatusCode != http.StatusOK {
-		return nil, nil
-	}
-
-	defer func() { _ = res.Body.Close() }()
-	return io.ReadAll(res.Body)
-}
-
-// NewRequest はHTTPリクエストを生成
-//
-// defaultRespondersを使用して、HTTPレスポンスを処理するための Request[[]byte] を生成します。
-func NewRequest() Request[[]byte] {
-	return NewRequestSliceFunc(defaultResponders)
-}
 
 // do HTTPリクエストを実行する
 //
@@ -45,11 +25,12 @@ func do[T any](client *http.Client, req *http.Request, responder ResponderFunc[T
 		return zero, err
 	}
 
+	defer func() { _ = res.Body.Close() }()
 	response, err := responder(res)
 	if err != nil {
 		return zero, err
 	}
-	if !reflect.ValueOf(response).IsNil() && !reflect.ValueOf(response).IsZero() {
+	if !isNilOrZero(response) {
 		return response, nil
 	}
 
@@ -59,4 +40,16 @@ func do[T any](client *http.Client, req *http.Request, responder ResponderFunc[T
 	}
 
 	return zero, errors.New("no responders")
+}
+
+// Deprecated
+func isNilOrZero[T any](v T) bool {
+	switch (reflect.TypeOf(v)).Kind() {
+	case reflect.Slice, reflect.Map:
+		return reflect.ValueOf(v).Len() == 0
+	case reflect.Pointer:
+		return reflect.ValueOf(v).IsNil() || reflect.ValueOf(v).Elem().IsZero()
+	default:
+		return reflect.ValueOf(v).IsZero()
+	}
 }

@@ -14,22 +14,10 @@ import (
 	"github.com/gorilla/schema"
 )
 
-// Request HTTPリクエストを表すインターフェイス
-//
-// Tはレスポンスの型を表します。
-type Request[T any] interface {
-	WithResponder(responder ResponderOrNextFunc[T]) Request[T]
-	HTTPClient(c *http.Client) Request[T]                                                        // Set the HTTP client to use for requests
-	Method(m string) Request[T]                                                                  // Set the HTTP method (GET, POST, etc.)
-	Headers(headers any) Request[T]                                                              // Set headers for the request
-	Header(key, value string) Request[T]                                                         // Set header for the request
-	BasicAuth(username, password string) Request[T]                                              // Set Basic-Auth header for the request
-	Query(params ...any) Request[T]                                                              // Set query parameters for the request
-	Get(ctx context.Context, u string, params ...any) (T, error)                                 // Execute a GET request
-	Post(ctx context.Context, u string, params any, attachments ...MultipartFormData) (T, error) // Execute a POST request
-	PostJSON(ctx context.Context, u string, params any) (T, error)
-	//Put(ctx context.Context) (T, error)                 // Execute a PUT request
-	//Delete(ctx context.Context) (T, error)              // Execute a DELETE request
+type ResponseReader interface {
+	io.Reader
+
+	Response() *http.Response
 }
 
 // ResponderFunc HTTPレスポンスを処理するための関数
@@ -43,10 +31,34 @@ type ResponderOrNextFunc[T any] func(*http.Response, ResponderFunc[T]) (T, error
 // NewRequestFunc Request[T]を生成する関数
 //
 // レスポンダー関数を指定してHTTPレスポンスボディを処理する方法を決定します。
-func NewRequestFunc[T *U, U any](responder ResponderFunc[T]) Request[T] {
-	return &requestImpl[T]{
+func NewRequestFunc[T any](responder ResponderFunc[T]) *Request[T] {
+	return &Request[T]{
 		responder: responder,
 	}
+}
+
+var defaultResponder = func(res *http.Response) (any, error) {
+	if res.StatusCode != http.StatusOK {
+		return nil, nil
+	}
+
+	return io.ReadAll(res.Body)
+}
+
+func NewRequest[T any]() *Request[T] {
+	return &Request[T]{responder: func(res *http.Response) (T, error) {
+		var zero T
+
+		response, err := defaultResponder(res)
+		if err != nil {
+			return zero, err
+		}
+		r, ok := response.(T)
+		if !ok {
+			return zero, nil
+		}
+		return r, err
+	}}
 }
 
 // NewRequestSliceFunc Request[T]を生成する関数(Tをスライス型にする時専用)
@@ -54,16 +66,16 @@ func NewRequestFunc[T *U, U any](responder ResponderFunc[T]) Request[T] {
 // レスポンダー関数を指定してHTTPレスポンスボディを処理する方法を決定します。
 // Tはスライス型である必要があります。
 // Deprecated: NewRequestFunc に統合予定。
-func NewRequestSliceFunc[T ~[]E, E any](responder ResponderFunc[T]) Request[T] {
-	return &requestImpl[T]{
+/*func NewRequestSliceFunc[T ~[]E, E any](responder ResponderFunc[T]) *Request[T] {
+	return &Request[T]{
 		responder: responder,
 	}
-}
+}*/
 
-// requestImpl HTTPリクエストの実装
+// Request HTTPリクエストの実装
 //
 // Tはレスポンスの型を表します。
-type requestImpl[T any] struct {
+type Request[T any] struct {
 	method            string
 	url               *url.URL
 	values            url.Values
@@ -77,26 +89,26 @@ type requestImpl[T any] struct {
 	httpClient *http.Client
 }
 
-func (r *requestImpl[T]) WithResponder(responder ResponderOrNextFunc[T]) Request[T] {
+func (r *Request[T]) WithResponder(responder ResponderOrNextFunc[T]) *Request[T] {
 	r.responder = func(resp *http.Response) (T, error) {
 		return responder(resp, r.responder)
 	}
 	return r
 }
 
-func (r *requestImpl[T]) HTTPClient(c *http.Client) Request[T] {
+func (r *Request[T]) HTTPClient(c *http.Client) *Request[T] {
 	r.httpClient = c
 	return r
 }
 
 // Method HTTPリクエストのメソッドを設定
-func (r *requestImpl[T]) Method(m string) Request[T] {
+func (r *Request[T]) Method(m string) *Request[T] {
 	r.method = m
 	return r
 }
 
 // Headers HTTPリクエストのヘッダーを設定
-func (r *requestImpl[T]) Headers(headers any) Request[T] {
+func (r *Request[T]) Headers(headers any) *Request[T] {
 	if h, ok := headers.(http.Header); ok {
 		if r.headers == nil {
 			r.headers = h
@@ -121,7 +133,7 @@ func (r *requestImpl[T]) Headers(headers any) Request[T] {
 }
 
 // Header HTTPリクエストのヘッダーを設定(key, valueによるstringペア)
-func (r *requestImpl[T]) Header(key, value string) Request[T] {
+func (r *Request[T]) Header(key, value string) *Request[T] {
 	if r.headers == nil {
 		r.headers = make(http.Header)
 	}
@@ -129,14 +141,14 @@ func (r *requestImpl[T]) Header(key, value string) Request[T] {
 	return r
 }
 
-func (r *requestImpl[T]) BasicAuth(username, password string) Request[T] {
+func (r *Request[T]) BasicAuth(username, password string) *Request[T] {
 	r.basicAuthUsername = username
 	r.basicAuthPassword = password
 	return r
 }
 
 // Query HTTPリクエストのクエリパラメータを設定
-func (r *requestImpl[T]) Query(params ...any) Request[T] {
+func (r *Request[T]) Query(params ...any) *Request[T] {
 	if len(params) == 1 {
 		v := url.Values{}
 		err := schema.NewEncoder().Encode(params[0], v)
@@ -155,7 +167,7 @@ func (r *requestImpl[T]) Query(params ...any) Request[T] {
 }
 
 // Get HTTP GETリクエストを実行
-func (r *requestImpl[T]) Get(ctx context.Context, u string, params ...any) (T, error) {
+func (r *Request[T]) Get(ctx context.Context, u string, params ...any) (T, error) {
 	var zero T
 
 	r.method = http.MethodGet
@@ -178,7 +190,7 @@ func (r *requestImpl[T]) Get(ctx context.Context, u string, params ...any) (T, e
 }
 
 // Post HTTP POSTリクエストを実行
-func (r *requestImpl[T]) Post(ctx context.Context, u string, params any, attachments ...MultipartFormData) (T, error) {
+func (r *Request[T]) Post(ctx context.Context, u string, params any, attachments ...MultipartFormData) (T, error) {
 	var zero T
 
 	r.method = http.MethodPost
@@ -241,7 +253,7 @@ func (r *requestImpl[T]) Post(ctx context.Context, u string, params any, attachm
 }
 
 // PostJSON JSONエンコードされたデータをリクエストボディに含むHTTP POSTリクエストを実行
-func (r *requestImpl[T]) PostJSON(ctx context.Context, u string, params any) (T, error) {
+func (r *Request[T]) PostJSON(ctx context.Context, u string, params any) (T, error) {
 	var zero T
 
 	r.method = http.MethodPost
@@ -274,19 +286,19 @@ func (r *requestImpl[T]) PostJSON(ctx context.Context, u string, params any) (T,
 // Put HTTP PUTリクエストを実行
 //
 // note: このメソッドは未実装です。
-func (r *requestImpl[T]) Put(ctx context.Context) (T, error) {
+func (r *Request[T]) Put(ctx context.Context) (T, error) {
 	panic("implement me")
 }
 
 // Delete HTTP DELETEリクエストを実行
 //
 // note: このメソッドは未実装です。
-func (r *requestImpl[T]) Delete(ctx context.Context) (T, error) {
+func (r *Request[T]) Delete(ctx context.Context) (T, error) {
 	panic("implement me")
 }
 
 // loadURL URLを分解して保持
-func (r *requestImpl[T]) loadURL(s string) error {
+func (r *Request[T]) loadURL(s string) error {
 	u, err := url.Parse(s)
 	if err != nil {
 		return err
@@ -311,14 +323,16 @@ func (r *requestImpl[T]) loadURL(s string) error {
 //
 // note: build と Do はそれぞれ http.Request を引数とすることから [http] への依存を起こしています。
 // 当該依存関係が正当なものかの再検討により、今後この関数は再設計の対象となりえます。
-func (r *requestImpl[T]) build(ctx context.Context) (*http.Request, error) {
+func (r *Request[T]) build(ctx context.Context) (*http.Request, error) {
 	r.url.RawQuery = r.values.Encode()
 	req, err := http.NewRequestWithContext(ctx, r.method, r.url.String(), r.body)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header = r.headers
+	if r.headers != nil {
+		req.Header = r.headers
+	}
 	if r.basicAuthUsername != "" && r.basicAuthPassword != "" {
 		req.SetBasicAuth(r.basicAuthUsername, r.basicAuthPassword)
 	}
