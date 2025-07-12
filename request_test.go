@@ -3,6 +3,7 @@ package httpc_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/url"
 	"testing"
 
@@ -34,4 +35,18 @@ func TestHttpbin_Get(t *testing.T) {
 	r := httpbinResponse{}
 	err = json.Unmarshal(resp, &r)
 	assert.NoError(t, err)
+}
+
+func TestHttpbin_Get_NotFound(t *testing.T) {
+	u, _ := url.JoinPath(httpbinEndpoint, "status/404")
+	resp, err := httpc.NewRequest().Get(context.Background(), u)
+	assert.Error(t, err)
+	assert.Nil(t, resp)
+}
+
+func TestNewRequest_WithResponder(t *testing.T) {
+	req := httpc.NewRequest().WithResponder(func(response *http.Response, r httpc.ResponderFunc[[]byte]) ([]byte, error) {
+		panic("implement me")
+	})
+	assert.NotNil(t, req)
 }

@@ -18,6 +18,7 @@ import (
 //
 // Tはレスポンスの型を表します。
 type Request[T any] interface {
+	WithResponder(responder ResponderOrNextFunc[T]) Request[T]
 	HTTPClient(c *http.Client) Request[T]                                                        // Set the HTTP client to use for requests
 	Method(m string) Request[T]                                                                  // Set the HTTP method (GET, POST, etc.)
 	Headers(headers any) Request[T]                                                              // Set headers for the request

@@ -49,7 +49,6 @@ func do[T any](client *http.Client, req *http.Request, responder ResponderFunc[T
 	if err != nil {
 		return zero, err
 	}
-	// if response != nil {
 	if !reflect.ValueOf(response).IsNil() && !reflect.ValueOf(response).IsZero() {
 		return response, nil
 	}
