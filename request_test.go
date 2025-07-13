@@ -97,8 +97,7 @@ func TestHttpbin_BasicAuth_Unauthorized(t *testing.T) {
 	resp, err := httpc.NewRequest[*[]byte]().Get(context.Background(), u)
 	assert.Error(t, err)
 	var e *httpc.Error
-	if errors.As(err, &e) {
-		assert.Equal(t, http.StatusUnauthorized, e.StatusCode())
-	}
+	assert.ErrorAs(t, err, &e)
+	assert.Equal(t, http.StatusUnauthorized, e.StatusCode())
 	assert.Nil(t, resp)
 }

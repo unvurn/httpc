@@ -7,10 +7,12 @@ import (
 
 type Error struct {
 	response *http.Response
+
+	body []byte
 }
 
 func NewError(response *http.Response) *Error {
-	return &Error{response}
+	return &Error{response: response}
 }
 
 func (e *Error) Error() string {
@@ -22,10 +24,14 @@ func (e *Error) StatusCode() int {
 }
 
 func (e *Error) ResponseBody() ([]byte, error) {
-	defer func() { _ = e.response.Body.Close() }()
-	body, err := io.ReadAll(e.response.Body)
-	if err != nil {
-		return nil, err
+	if e.body == nil {
+		defer func() { _ = e.response.Body.Close() }()
+
+		var err error
+		e.body, err = io.ReadAll(e.response.Body)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return body, nil
+	return e.body, nil
 }

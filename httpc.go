@@ -3,7 +3,8 @@ package httpc
 import (
 	"errors"
 	"net/http"
-	"reflect"
+
+	"github.com/unvurn/core/values"
 )
 
 // do HTTPリクエストを実行する
@@ -30,7 +31,7 @@ func do[T any](client *http.Client, req *http.Request, responder ResponderFunc[T
 	if err != nil {
 		return zero, err
 	}
-	if !isNilOrZero(response) {
+	if !values.IsNilOrZero(response) {
 		return response, nil
 	}
 
@@ -40,16 +41,4 @@ func do[T any](client *http.Client, req *http.Request, responder ResponderFunc[T
 	}
 
 	return zero, errors.New("no responders")
-}
-
-// Deprecated
-func isNilOrZero[T any](v T) bool {
-	switch (reflect.TypeOf(v)).Kind() {
-	case reflect.Slice, reflect.Map:
-		return reflect.ValueOf(v).Len() == 0
-	case reflect.Pointer:
-		return reflect.ValueOf(v).IsNil() || reflect.ValueOf(v).Elem().IsZero()
-	default:
-		return reflect.ValueOf(v).IsZero()
-	}
 }
