@@ -14,12 +14,6 @@ import (
 	"github.com/gorilla/schema"
 )
 
-type ResponseReader interface {
-	io.Reader
-
-	Response() *http.Response
-}
-
 // ResponderFunc HTTPレスポンスを処理するための関数
 //
 // Condition はHTTPレスポンス [*http.Response] がこの関数で定義された条件を満たすかどうかを判断します。
@@ -37,23 +31,19 @@ func NewRequestFunc[T any](responder ResponderFunc[T]) *Request[T] {
 	}
 }
 
-var defaultResponder = func(res *http.Response) (any, error) {
-	if res.StatusCode != http.StatusOK {
-		return nil, nil
-	}
-
-	return io.ReadAll(res.Body)
-}
-
 func NewRequest[T any]() *Request[T] {
 	return &Request[T]{responder: func(res *http.Response) (T, error) {
 		var zero T
 
-		response, err := defaultResponder(res)
+		var b []byte
+		var err error
+		if res.StatusCode == http.StatusOK {
+			b, err = io.ReadAll(res.Body)
+		}
 		if err != nil {
 			return zero, err
 		}
-		r, ok := response.(T)
+		r, ok := any(b).(T)
 		if !ok {
 			return zero, nil
 		}
