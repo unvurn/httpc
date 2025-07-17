@@ -74,6 +74,7 @@ type Request[T any] struct {
 	responder         ResponderFunc[T]
 	basicAuthUsername string
 	basicAuthPassword string
+	keepAlive         bool
 
 	// HttpClient HTTPクライアントを返すメソッド
 	httpClient *http.Client
@@ -134,6 +135,11 @@ func (r *Request[T]) Header(key, value string) *Request[T] {
 func (r *Request[T]) BasicAuth(username, password string) *Request[T] {
 	r.basicAuthUsername = username
 	r.basicAuthPassword = password
+	return r
+}
+
+func (r *Request[T]) KeepAlive(keepAlive bool) *Request[T] {
+	r.keepAlive = keepAlive
 	return r
 }
 
@@ -326,5 +332,6 @@ func (r *Request[T]) build(ctx context.Context) (*http.Request, error) {
 	if r.basicAuthUsername != "" && r.basicAuthPassword != "" {
 		req.SetBasicAuth(r.basicAuthUsername, r.basicAuthPassword)
 	}
+	req.Close = !r.keepAlive
 	return req, nil
 }
