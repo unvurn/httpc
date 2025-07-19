@@ -3,7 +3,6 @@ package httpc
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -27,12 +26,13 @@ type ResponderOrNextFunc[T any] func(*http.Response, ResponderFunc[T]) (T, error
 // レスポンダー関数を指定してHTTPレスポンスボディを処理する方法を決定します。
 func NewRequestFunc[T any](responder ResponderFunc[T]) *Request[T] {
 	return &Request[T]{
+		headers:   make(http.Header),
 		responder: responder,
 	}
 }
 
 func NewRequest[T any]() *Request[T] {
-	return &Request[T]{responder: func(res *http.Response) (T, error) {
+	return NewRequestFunc(func(res *http.Response) (T, error) {
 		var zero T
 
 		var b []byte
@@ -48,7 +48,7 @@ func NewRequest[T any]() *Request[T] {
 			return zero, nil
 		}
 		return r, err
-	}}
+	})
 }
 
 // NewRequestSliceFunc Request[T]を生成する関数(Tをスライス型にする時専用)
@@ -66,15 +66,18 @@ func NewRequest[T any]() *Request[T] {
 //
 // Tはレスポンスの型を表します。
 type Request[T any] struct {
-	method            string
-	url               *url.URL
-	values            url.Values
+	method string
+	url    *url.URL
+	values url.Values
+
 	headers           http.Header
-	body              io.Reader
-	responder         ResponderFunc[T]
 	basicAuthUsername string
 	basicAuthPassword string
 	keepAlive         bool
+
+	body io.Reader
+
+	responder ResponderFunc[T]
 
 	// HttpClient HTTPクライアントを返すメソッド
 	httpClient *http.Client
@@ -111,9 +114,6 @@ func (r *Request[T]) Headers(headers any) *Request[T] {
 			}
 		}
 	} else if h, ok := headers.(map[string]string); ok {
-		if r.headers == nil {
-			r.headers = make(http.Header)
-		}
 		for key, value := range h {
 			r.headers.Add(key, value)
 		}
@@ -125,9 +125,6 @@ func (r *Request[T]) Headers(headers any) *Request[T] {
 
 // Header HTTPリクエストのヘッダーを設定(key, valueによるstringペア)
 func (r *Request[T]) Header(key, value string) *Request[T] {
-	if r.headers == nil {
-		r.headers = make(http.Header)
-	}
 	r.headers.Add(key, value)
 	return r
 }
@@ -164,32 +161,17 @@ func (r *Request[T]) Query(params ...any) *Request[T] {
 
 // Get HTTP GETリクエストを実行
 func (r *Request[T]) Get(ctx context.Context, u string, params ...any) (T, error) {
-	var zero T
-
-	r.method = http.MethodGet
-
-	if len(params) > 0 {
-		r.Query(params...)
-	}
-
-	var err error
-	err = r.loadURL(u)
-	if err != nil {
-		return zero, err
-	}
-
-	req, err := r.build(ctx)
-	if err != nil {
-		return zero, err
-	}
-	return do[T](r.httpClient, req, r.responder)
+	return r.DoFunc(ctx, http.MethodGet, u, "", func() (io.Reader, error) {
+		if len(params) > 0 {
+			r.Query(params...)
+		}
+		return nil, nil
+	})
 }
 
 // Post HTTP POSTリクエストを実行
 func (r *Request[T]) Post(ctx context.Context, u string, params any, attachments ...MultipartFormData) (T, error) {
 	var zero T
-
-	r.method = http.MethodPost
 
 	v := url.Values{}
 	if err := schema.NewEncoder().Encode(params, v); err != nil {
@@ -197,14 +179,13 @@ func (r *Request[T]) Post(ctx context.Context, u string, params any, attachments
 	}
 
 	if len(attachments) == 0 {
-		if r.headers == nil {
-			r.headers = make(http.Header)
-		}
 		ve := v.Encode()
-		r.headers.Set("Content-Type", "application/x-www-form-urlencoded")
-		r.headers.Set("Cache-Control", "no-cache")
 		r.headers.Set("Content-Length", strconv.Itoa(len(ve)))
 		r.body = strings.NewReader(ve)
+
+		return r.DoFunc(ctx, http.MethodPost, u, "application/x-www-form-urlencoded", func() (io.Reader, error) {
+			return strings.NewReader(ve), nil
+		})
 	} else {
 		var buf bytes.Buffer
 		mw := multipart.NewWriter(&buf)
@@ -227,45 +208,30 @@ func (r *Request[T]) Post(ctx context.Context, u string, params any, attachments
 			return zero, err
 		}
 
-		if r.headers == nil {
-			r.headers = make(http.Header)
-		}
-		r.headers.Set("Content-Type", mw.FormDataContentType())
-		r.headers.Set("Cache-Control", "no-cache")
-		r.body = &buf
+		return r.DoFunc(ctx, http.MethodPost, u, mw.FormDataContentType(), func() (io.Reader, error) {
+			return &buf, nil
+		})
 	}
-
-	var err error
-	err = r.loadURL(u)
-	if err != nil {
-		return zero, err
-	}
-
-	req, err := r.build(ctx)
-	if err != nil {
-		return zero, err
-	}
-	return do[T](r.httpClient, req, r.responder)
 }
 
-// PostJSON JSONエンコードされたデータをリクエストボディに含むHTTP POSTリクエストを実行
-func (r *Request[T]) PostJSON(ctx context.Context, u string, params any) (T, error) {
+// DoFunc JSONエンコードされたデータをリクエストボディに含むHTTP POSTリクエストを実行
+func (r *Request[T]) DoFunc(ctx context.Context, method, u, contentType string, payloadFunc func() (io.Reader, error)) (T, error) {
 	var zero T
 
-	r.method = http.MethodPost
+	r.method = method
 
-	var buf bytes.Buffer
-	var err error
-	if err = json.NewEncoder(&buf).Encode(params); err != nil {
+	body, err := payloadFunc()
+	if err != nil {
 		return zero, err
 	}
 
-	if r.headers == nil {
-		r.headers = make(http.Header)
+	if method != http.MethodGet {
+		r.headers.Set("Cache-Control", "no-cache")
 	}
-	r.headers.Set("Content-Type", "application/json")
-	r.headers.Set("Cache-Control", "no-cache")
-	r.body = &buf
+	if contentType != "" && body != nil {
+		r.headers.Set("Content-Type", contentType)
+		r.body = body
+	}
 
 	err = r.loadURL(u)
 	if err != nil {
