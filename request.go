@@ -24,43 +24,30 @@ type ResponderOrNextFunc[T any] func(*http.Response, ResponderFunc[T]) (T, error
 // NewRequestFunc Request[T]を生成する関数
 //
 // レスポンダー関数を指定してHTTPレスポンスボディを処理する方法を決定します。
-func NewRequestFunc[T any](responder ResponderFunc[T]) *Request[T] {
+func NewRequestFunc[T any](contentType string, decoder DecoderFunc[T]) *Request[T] {
 	return &Request[T]{
-		headers:   make(http.Header),
-		responder: responder,
+		headers:  make(http.Header),
+		decoders: map[string]DecoderFunc[T]{contentType: decoder},
 	}
 }
 
 func NewRequest[T any]() *Request[T] {
-	return NewRequestFunc(func(res *http.Response) (T, error) {
-		var zero T
-
-		var b []byte
-		var err error
-		if res.StatusCode == http.StatusOK {
-			b, err = io.ReadAll(res.Body)
-		}
-		if err != nil {
-			return zero, err
-		}
-		r, ok := any(b).(T)
-		if !ok {
-			return zero, nil
-		}
-		return r, err
-	})
+	return NewRequestFunc("", defaultDecoder[T])
 }
 
-// NewRequestSliceFunc Request[T]を生成する関数(Tをスライス型にする時専用)
-//
-// レスポンダー関数を指定してHTTPレスポンスボディを処理する方法を決定します。
-// Tはスライス型である必要があります。
-// Deprecated: NewRequestFunc に統合予定。
-/*func NewRequestSliceFunc[T ~[]E, E any](responder ResponderFunc[T]) *Request[T] {
-	return &Request[T]{
-		responder: responder,
+func defaultDecoder[T any](body io.Reader) (T, error) {
+	var zero T
+
+	b, err := io.ReadAll(body)
+	if err != nil {
+		return zero, err
 	}
-}*/
+	r, ok := any(b).(T)
+	if !ok {
+		return zero, nil
+	}
+	return r, err
+}
 
 // Request HTTPリクエストの実装
 //
@@ -77,16 +64,14 @@ type Request[T any] struct {
 
 	body io.Reader
 
-	responder ResponderFunc[T]
+	decoders map[string]DecoderFunc[T]
 
 	// HttpClient HTTPクライアントを返すメソッド
 	httpClient *http.Client
 }
 
-func (r *Request[T]) WithResponder(responder ResponderOrNextFunc[T]) *Request[T] {
-	r.responder = func(resp *http.Response) (T, error) {
-		return responder(resp, r.responder)
-	}
+func (r *Request[T]) Decoder(contentType string, decoder DecoderFunc[T]) *Request[T] {
+	r.decoders[contentType] = decoder
 	return r
 }
 
@@ -242,7 +227,7 @@ func (r *Request[T]) DoFunc(ctx context.Context, method, u, contentType string, 
 	if err != nil {
 		return zero, err
 	}
-	return do[T](r.httpClient, req, r.responder)
+	return do[T](r.httpClient, req, r.decoders)
 }
 
 // Put HTTP PUTリクエストを実行

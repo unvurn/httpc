@@ -2,10 +2,12 @@ package httpc
 
 import (
 	"errors"
+	"io"
 	"net/http"
-
-	"github.com/unvurn/core/values"
+	"strings"
 )
+
+type DecoderFunc[T any] func(io.Reader) (T, error)
 
 // do HTTPリクエストを実行する
 //
@@ -14,7 +16,7 @@ import (
 //
 // note: build と Do はそれぞれ http.Request を引数とすることから [http] への依存を起こしています。
 // 当該依存関係が正当なものかの再検討により、今後この関数は再設計の対象となりえます。
-func do[T any](client *http.Client, req *http.Request, responder ResponderFunc[T]) (T, error) {
+func do[T any](client *http.Client, req *http.Request, decoders map[string]DecoderFunc[T]) (T, error) {
 	var zero T
 
 	if client == nil {
@@ -27,18 +29,21 @@ func do[T any](client *http.Client, req *http.Request, responder ResponderFunc[T
 	}
 
 	defer func() { _ = res.Body.Close() }()
-	response, err := responder(res)
-	if err != nil {
-		return zero, err
-	}
-	if !values.IsNilOrZero(response) {
-		return response, nil
-	}
 
-	// as default error responder
 	if res.StatusCode != http.StatusOK {
 		return zero, NewError(res)
 	}
 
-	return zero, errors.New("no responders")
+	var decoder DecoderFunc[T]
+	for t, f := range decoders {
+		h := res.Header.Get("Content-Type")
+		if strings.Contains(h, t) {
+			decoder = f
+		}
+	}
+	if decoder == nil {
+		return zero, errors.New("no responders")
+	}
+
+	return decoder(res.Body)
 }

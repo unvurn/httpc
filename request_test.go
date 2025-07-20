@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"testing"
@@ -57,7 +58,7 @@ func TestHttpbin_Get_NotFound(t *testing.T) {
 }
 
 func TestNewRequest_WithResponder(t *testing.T) {
-	req := httpc.NewRequest[[]byte]().WithResponder(func(response *http.Response, r httpc.ResponderFunc[[]byte]) ([]byte, error) {
+	req := httpc.NewRequest[[]byte]().Decoder("", func(r io.Reader) ([]byte, error) {
 		panic("implement me")
 	})
 	assert.NotNil(t, req)
