@@ -3,50 +3,46 @@ package httpc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/gorilla/schema"
 )
 
-// ResponderFunc HTTPレスポンスを処理するための関数
-//
-// Condition はHTTPレスポンス [*http.Response] がこの関数で定義された条件を満たすかどうかを判断します。
-// Responder はレスポンスの実際の処理を担当し、型Tの値を生成して返します。
-type ResponderFunc[T any] func(*http.Response) (T, error)
+type DecoderFunc[T any] func(io.Reader) (T, error)
 
-type ResponderOrNextFunc[T any] func(*http.Response, ResponderFunc[T]) (T, error)
-
-// NewRequestFunc Request[T]を生成する関数
-//
-// レスポンダー関数を指定してHTTPレスポンスボディを処理する方法を決定します。
-func NewRequestFunc[T any](contentType string, decoder DecoderFunc[T]) *Request[T] {
-	return &Request[T]{
-		headers:  make(http.Header),
-		decoders: map[string]DecoderFunc[T]{contentType: decoder},
-	}
-}
+var ErrUnexpectedType = errors.New("unexpected type")
 
 func NewRequest[T any]() *Request[T] {
-	return NewRequestFunc("", defaultDecoder[T])
+	return NewRequestFunc(defaultDecoder[T])
 }
 
-func defaultDecoder[T any](body io.Reader) (T, error) {
+func defaultDecoder[T any](r io.Reader) (T, error) {
 	var zero T
 
-	b, err := io.ReadAll(body)
+	b, err := io.ReadAll(r)
 	if err != nil {
 		return zero, err
 	}
-	r, ok := any(b).(T)
+	d, ok := any(b).(T)
 	if !ok {
-		return zero, nil
+		return zero, ErrUnexpectedType
 	}
-	return r, err
+	return d, err
+}
+
+// NewRequestFunc Request[T]を生成する関数
+//
+// デコーダーを指定してHTTPレスポンスボディを処理する方法を決定します。
+func NewRequestFunc[T any](defaultDecoderFunc DecoderFunc[T]) *Request[T] {
+	return &Request[T]{
+		headers:  make(http.Header),
+		decoders: map[string]DecoderFunc[T]{"": defaultDecoderFunc},
+	}
 }
 
 // Request HTTPリクエストの実装
@@ -103,7 +99,7 @@ func (r *Request[T]) Headers(headers any) *Request[T] {
 			r.headers.Add(key, value)
 		}
 	} else {
-		panic("invalid header type, expected http.Headers")
+		panic("invalid header type, expected http.Headers or map[string]string")
 	}
 	return r
 }
@@ -165,9 +161,6 @@ func (r *Request[T]) Post(ctx context.Context, u string, params any, attachments
 
 	if len(attachments) == 0 {
 		ve := v.Encode()
-		r.headers.Set("Content-Length", strconv.Itoa(len(ve)))
-		r.body = strings.NewReader(ve)
-
 		return r.DoFunc(ctx, http.MethodPost, u, "application/x-www-form-urlencoded", func() (io.Reader, error) {
 			return strings.NewReader(ve), nil
 		})
@@ -227,7 +220,7 @@ func (r *Request[T]) DoFunc(ctx context.Context, method, u, contentType string, 
 	if err != nil {
 		return zero, err
 	}
-	return do[T](r.httpClient, req, r.decoders)
+	return r.do(req)
 }
 
 // Put HTTP PUTリクエストを実行
@@ -285,4 +278,48 @@ func (r *Request[T]) build(ctx context.Context) (*http.Request, error) {
 	}
 	req.Close = !r.keepAlive
 	return req, nil
+}
+
+// do HTTPリクエストを実行する
+//
+// reqはhttp.Requestを表し、respondersはレスポンスを処理するための関数のスライスです。
+// レスポンスの型Tを返し、エラーが発生した場合はエラーを返します。
+func (r *Request[T]) do(req *http.Request) (T, error) {
+	var zero T
+
+	client := r.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	res, err := client.Do(req)
+	if err != nil {
+		return zero, err
+	}
+
+	defer func() { _ = res.Body.Close() }()
+
+	if res.StatusCode != http.StatusOK {
+		return zero, NewError(res)
+	}
+
+	ct := contentType(res.Header.Get("Content-Type"))
+
+	var decoder DecoderFunc[T]
+	decoder = r.decoders[ct]
+	if decoder == nil {
+		decoder = r.decoders[""] // default decoder
+		if decoder == nil {
+			return zero, errors.New("no responders")
+		}
+	}
+
+	return decoder(res.Body)
+}
+
+func contentType(value string) string {
+	if value == "" {
+		return ""
+	}
+	return strings.Split(strings.TrimSpace(value), ";")[0]
 }
