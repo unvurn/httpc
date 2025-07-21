@@ -1,9 +1,13 @@
 package httpc
 
 import (
+	"errors"
 	"io"
 	"net/http"
 )
+
+var ErrNoAvailableDecoder = errors.New("no available decoder")
+var ErrUnexpectedType = errors.New("unexpected type")
 
 type Error struct {
 	response *http.Response
@@ -11,7 +15,7 @@ type Error struct {
 	body []byte
 }
 
-func NewError(response *http.Response) *Error {
+func newError(response *http.Response) error {
 	return &Error{response: response}
 }
 

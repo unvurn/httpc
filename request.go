@@ -3,7 +3,6 @@ package httpc
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -14,8 +13,7 @@ import (
 )
 
 type DecoderFunc[T any] func(io.Reader) (T, error)
-
-var ErrUnexpectedType = errors.New("unexpected type")
+type ErrorHandlerFunc[T any] func(response *http.Response) error
 
 func NewRequest[T any]() *Request[T] {
 	return NewRequestFunc(defaultDecoder[T])
@@ -38,10 +36,11 @@ func defaultDecoder[T any](r io.Reader) (T, error) {
 // NewRequestFunc Request[T]を生成する関数
 //
 // デコーダーを指定してHTTPレスポンスボディを処理する方法を決定します。
-func NewRequestFunc[T any](defaultDecoderFunc DecoderFunc[T]) *Request[T] {
+func NewRequestFunc[T any](defaultDecoder DecoderFunc[T]) *Request[T] {
 	return &Request[T]{
-		headers:  make(http.Header),
-		decoders: map[string]DecoderFunc[T]{"": defaultDecoderFunc},
+		headers:       http.Header{},
+		decoders:      map[string]DecoderFunc[T]{"": defaultDecoder},
+		errorHandlers: map[string]ErrorHandlerFunc[T]{"": newError},
 	}
 }
 
@@ -60,7 +59,8 @@ type Request[T any] struct {
 
 	body io.Reader
 
-	decoders map[string]DecoderFunc[T]
+	decoders      map[string]DecoderFunc[T]
+	errorHandlers map[string]ErrorHandlerFunc[T]
 
 	// HttpClient HTTPクライアントを返すメソッド
 	httpClient *http.Client
@@ -68,6 +68,11 @@ type Request[T any] struct {
 
 func (r *Request[T]) Decoder(contentType string, decoder DecoderFunc[T]) *Request[T] {
 	r.decoders[contentType] = decoder
+	return r
+}
+
+func (r *Request[T]) Error(contentType string, errorFunc func(*http.Response) error) *Request[T] {
+	r.errorHandlers[contentType] = errorFunc
 	return r
 }
 
@@ -300,21 +305,37 @@ func (r *Request[T]) do(req *http.Request) (T, error) {
 	defer func() { _ = res.Body.Close() }()
 
 	if res.StatusCode != http.StatusOK {
-		return zero, NewError(res)
+		return zero, r.handleErrorResponse(res)
 	}
 
-	ct := contentType(res.Header.Get("Content-Type"))
+	return r.handleResponse(res)
+}
 
-	var decoder DecoderFunc[T]
-	decoder = r.decoders[ct]
+func (r *Request[T]) handleResponse(res *http.Response) (T, error) {
+	ct := contentType(res.Header.Get("Content-Type"))
+	decoder := r.decoders[ct]
 	if decoder == nil {
 		decoder = r.decoders[""] // default decoder
 		if decoder == nil {
-			return zero, errors.New("no responders")
+			var zero T
+			return zero, ErrNoAvailableDecoder
 		}
 	}
 
 	return decoder(res.Body)
+}
+
+func (r *Request[T]) handleErrorResponse(res *http.Response) error {
+	ct := contentType(res.Header.Get("Content-Type"))
+	handler := r.errorHandlers[ct]
+	if handler == nil {
+		handler = r.errorHandlers[""] // default error handler
+		if handler == nil {
+			handler = newError
+		}
+	}
+
+	return handler(res)
 }
 
 func contentType(value string) string {
