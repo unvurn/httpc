@@ -13,6 +13,7 @@ import (
 	. "github.com/unvurn/core"
 )
 
+type EncoderFunc func(any) (io.Reader, error)
 type DecoderFunc[T any] func([]byte) (T, error)
 type ErrorHandlerFunc func(*http.Response, []byte) error
 
@@ -47,12 +48,20 @@ type Request[T any] struct {
 
 	body io.Reader
 
+	encoderContentType  string
+	encoder             EncoderFunc
 	decoders            map[string]DecoderFunc[T]
 	errorHandlers       map[string]ErrorHandlerFunc
 	defaultErrorHandler ErrorHandlerFunc
 
 	// HttpClient HTTPクライアントを返すメソッド
 	httpClient *http.Client
+}
+
+func (r *Request[T]) Encoder(contentType string, encoder EncoderFunc) *Request[T] {
+	r.encoderContentType = contentType
+	r.encoder = encoder
+	return r
 }
 
 func (r *Request[T]) Decoder(contentType string, decoder DecoderFunc[T]) *Request[T] {
@@ -135,10 +144,10 @@ func (r *Request[T]) Query(params ...any) *Request[T] {
 }
 
 // Get HTTP GETリクエストを実行
-func (r *Request[T]) Get(ctx context.Context, path string, params ...any) (T, error) {
+func (r *Request[T]) Get(ctx context.Context, u string, params ...any) (T, error) {
 	var v T
 
-	result, err := r.TryGet(ctx, path, params...)
+	result, err := r.TryGet(ctx, u, params...)
 	if err != nil {
 		// as zero value
 		return v, err
@@ -149,7 +158,7 @@ func (r *Request[T]) Get(ctx context.Context, path string, params ...any) (T, er
 
 // TryGet HTTP GETリクエストを実行
 func (r *Request[T]) TryGet(ctx context.Context, u string, params ...any) (Result, error) {
-	return r.DoFunc(ctx, http.MethodGet, u, "", func() (io.Reader, error) {
+	return r.TryDoFunc(ctx, http.MethodGet, u, "", func() (io.Reader, error) {
 		if len(params) > 0 {
 			r.Query(params...)
 		}
@@ -157,23 +166,48 @@ func (r *Request[T]) TryGet(ctx context.Context, u string, params ...any) (Resul
 	})
 }
 
-// Post HTTP POSTリクエストを実行
-func (r *Request[T]) Post(ctx context.Context, u string, params any, attachments ...MultipartFormData) (T, error) {
+// Post HTTP GETリクエストを実行
+func (r *Request[T]) Post(ctx context.Context, u string, params any) (T, error) {
 	var v T
 
-	result, err := r.TryPost(ctx, u, params, attachments...)
+	result, err := r.TryPost(ctx, u, params)
 	if err != nil {
 		// as zero value
 		return v, err
 	}
 	err = result.As(&v)
+	return v, err
+}
+
+func (r *Request[T]) TryPost(ctx context.Context, u string, params any) (Result, error) {
+	if r.encoder == nil {
+		return nil, ErrNoAvailableEncoder
+	}
+	return r.TryDoFunc(ctx, http.MethodPost, u, r.encoderContentType, func() (io.Reader, error) {
+		return r.encoder(params)
+	})
+}
+
+// PostForm HTTP POSTリクエストを実行
+func (r *Request[T]) PostForm(ctx context.Context, u string, params any, attachments ...MultipartFormData) (T, error) {
+	var zero T
+
+	result, err := r.TryPostForm(ctx, u, params, attachments...)
+	if err != nil {
+		return zero, err
+	}
+	var v T
+	err = result.As(&v)
+	if err != nil {
+		return zero, err
+	}
 	return v, nil
 }
 
-// TryPost HTTP POSTリクエストを実行
+// TryPostForm HTTP POSTリクエストを実行
 //
 // 返値として
-func (r *Request[T]) TryPost(ctx context.Context, u string, params any, attachments ...MultipartFormData) (Result, error) {
+func (r *Request[T]) TryPostForm(ctx context.Context, u string, params any, attachments ...MultipartFormData) (Result, error) {
 	v := url.Values{}
 	if err := schema.NewEncoder().Encode(params, v); err != nil {
 		return nil, err
@@ -181,7 +215,7 @@ func (r *Request[T]) TryPost(ctx context.Context, u string, params any, attachme
 
 	if len(attachments) == 0 {
 		ve := v.Encode()
-		return r.DoFunc(ctx, http.MethodPost, u, "application/x-www-form-urlencoded", func() (io.Reader, error) {
+		return r.TryDoFunc(ctx, http.MethodPost, u, "application/x-www-form-urlencoded", func() (io.Reader, error) {
 			return strings.NewReader(ve), nil
 		})
 	} else {
@@ -206,14 +240,14 @@ func (r *Request[T]) TryPost(ctx context.Context, u string, params any, attachme
 			return nil, err
 		}
 
-		return r.DoFunc(ctx, http.MethodPost, u, mw.FormDataContentType(), func() (io.Reader, error) {
+		return r.TryDoFunc(ctx, http.MethodPost, u, mw.FormDataContentType(), func() (io.Reader, error) {
 			return &buf, nil
 		})
 	}
 }
 
 // DoFunc JSONエンコードされたデータをリクエストボディに含むHTTP POSTリクエストを実行
-func (r *Request[T]) DoFunc(ctx context.Context, method, u, contentType string, payloadFunc func() (io.Reader, error)) (Result, error) {
+func (r *Request[T]) TryDoFunc(ctx context.Context, method, u, contentType string, payloadFunc func() (io.Reader, error)) (Result, error) {
 	r.method = method
 
 	body, err := payloadFunc()

@@ -194,7 +194,7 @@ func TestHttpbin_PostForm(t *testing.T) {
 		Age:    25,
 		Scores: []int{100, 90, 80},
 	}
-	b, err := httpc.NewRequest[[]byte]().Post(context.Background(), u, p)
+	b, err := httpc.NewRequest[[]byte]().PostForm(context.Background(), u, p)
 	assert.NoError(t, err)
 
 	var resp httpbinPostFormResponse[params]
@@ -219,7 +219,7 @@ func TestHttpbin_PostFileUpload(t *testing.T) {
 		Age:    25,
 		Scores: []int{100, 90, 80},
 	}
-	b, err := httpc.NewRequest[[]byte]().Post(context.Background(), u, p,
+	b, err := httpc.NewRequest[[]byte]().PostForm(context.Background(), u, p,
 		form.Bytes("data1", "data1.txt", []byte("This is data1 content.")),
 		form.File("data2", "testdata/samples/dummy.pdf"))
 	assert.NoError(t, err)

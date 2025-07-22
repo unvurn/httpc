@@ -5,6 +5,7 @@ import (
 	"net/http"
 )
 
+var ErrNoAvailableEncoder = errors.New("no available encoder")
 var ErrNoAvailableDecoder = errors.New("no available decoder")
 var ErrUnexpectedType = errors.New("unexpected type")
 
