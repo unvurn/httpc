@@ -2,7 +2,6 @@ package httpc
 
 import (
 	"errors"
-	"io"
 	"net/http"
 )
 
@@ -15,8 +14,8 @@ type Error struct {
 	body []byte
 }
 
-func newError(response *http.Response) error {
-	return &Error{response: response}
+func newError(response *http.Response, body []byte) error {
+	return &Error{response: response, body: body}
 }
 
 func (e *Error) Error() string {
@@ -27,15 +26,6 @@ func (e *Error) StatusCode() int {
 	return e.response.StatusCode
 }
 
-func (e *Error) ResponseBody() ([]byte, error) {
-	if e.body == nil {
-		defer func() { _ = e.response.Body.Close() }()
-
-		var err error
-		e.body, err = io.ReadAll(e.response.Body)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return e.body, nil
+func (e *Error) Body() []byte {
+	return e.body
 }

@@ -10,37 +10,25 @@ import (
 	"strings"
 
 	"github.com/gorilla/schema"
+	. "github.com/unvurn/core"
 )
 
-type DecoderFunc[T any] func(io.Reader) (T, error)
-type ErrorHandlerFunc[T any] func(response *http.Response) error
+type DecoderFunc[T any] func([]byte) (T, error)
+type ErrorHandlerFunc func(*http.Response, []byte) error
 
 func NewRequest[T any]() *Request[T] {
-	return NewRequestFunc(defaultDecoder[T])
-}
-
-func defaultDecoder[T any](r io.Reader) (T, error) {
-	var zero T
-
-	b, err := io.ReadAll(r)
-	if err != nil {
-		return zero, err
-	}
-	d, ok := any(b).(T)
-	if !ok {
-		return zero, ErrUnexpectedType
-	}
-	return d, err
+	return NewRequestFunc[T]()
 }
 
 // NewRequestFunc Request[T]を生成する関数
 //
 // デコーダーを指定してHTTPレスポンスボディを処理する方法を決定します。
-func NewRequestFunc[T any](defaultDecoder DecoderFunc[T]) *Request[T] {
+func NewRequestFunc[T any]() *Request[T] {
 	return &Request[T]{
-		headers:       http.Header{},
-		decoders:      map[string]DecoderFunc[T]{"": defaultDecoder},
-		errorHandlers: map[string]ErrorHandlerFunc[T]{"": newError},
+		headers:             http.Header{},
+		decoders:            map[string]DecoderFunc[T]{},
+		errorHandlers:       map[string]ErrorHandlerFunc{},
+		defaultErrorHandler: newError,
 	}
 }
 
@@ -59,8 +47,9 @@ type Request[T any] struct {
 
 	body io.Reader
 
-	decoders      map[string]DecoderFunc[T]
-	errorHandlers map[string]ErrorHandlerFunc[T]
+	decoders            map[string]DecoderFunc[T]
+	errorHandlers       map[string]ErrorHandlerFunc
+	defaultErrorHandler ErrorHandlerFunc
 
 	// HttpClient HTTPクライアントを返すメソッド
 	httpClient *http.Client
@@ -71,7 +60,7 @@ func (r *Request[T]) Decoder(contentType string, decoder DecoderFunc[T]) *Reques
 	return r
 }
 
-func (r *Request[T]) Error(contentType string, errorFunc func(*http.Response) error) *Request[T] {
+func (r *Request[T]) Error(contentType string, errorFunc func(*http.Response, []byte) error) *Request[T] {
 	r.errorHandlers[contentType] = errorFunc
 	return r
 }
@@ -324,37 +313,34 @@ func (r *Request[T]) do(req *http.Request) (Result, error) {
 		return nil, err
 	}
 
-	if res.StatusCode != http.StatusOK {
-		return nil, r.handleErrorResponse(res)
+	defer func() { _ = res.Body.Close() }()
+	b, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
 	}
 
-	return r.handleResponse(res)
+	if res.StatusCode != http.StatusOK {
+		return nil, r.handleErrorResponse(res, b)
+	}
+
+	return r.handleResponse(res, b)
 }
 
-func (r *Request[T]) handleResponse(res *http.Response) (Result, error) {
+func (r *Request[T]) handleResponse(res *http.Response, b []byte) (Result, error) {
 	ct := contentType(res.Header.Get("Content-Type"))
 	decoder := r.decoders[ct]
-	if decoder == nil {
-		decoder = r.decoders[""] // default decoder
-		if decoder == nil {
-			return nil, ErrNoAvailableDecoder
-		}
-	}
 
-	return NewResponseResult[T](res, decoder), nil
+	return newHttpResult[T](res, b, decoder), nil
 }
 
-func (r *Request[T]) handleErrorResponse(res *http.Response) error {
+func (r *Request[T]) handleErrorResponse(res *http.Response, b []byte) error {
 	ct := contentType(res.Header.Get("Content-Type"))
 	handler := r.errorHandlers[ct]
 	if handler == nil {
-		handler = r.errorHandlers[""] // default error handler
-		if handler == nil {
-			handler = newError
-		}
+		handler = r.defaultErrorHandler
 	}
 
-	return handler(res)
+	return handler(res, b)
 }
 
 func contentType(value string) string {

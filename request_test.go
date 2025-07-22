@@ -102,12 +102,12 @@ const httpbinEndpoint = "https://httpbin.org"
 
 func TestHttpbin_Get(t *testing.T) {
 	u, _ := url.JoinPath(httpbinEndpoint, "get")
-	resp, err := httpc.NewRequest[[]byte]().Get(context.Background(), u)
+	b, err := httpc.NewRequest[[]byte]().Get(context.Background(), u)
 	assert.NoError(t, err)
-	assert.NotNil(t, resp)
+	assert.NotNil(t, b)
 
 	r := httpbinResponse{}
-	err = json.Unmarshal(resp, &r)
+	err = json.Unmarshal(b, &r)
 	assert.NoError(t, err)
 }
 
@@ -176,13 +176,13 @@ func TestHttpbin_GetQuery_NullableString(t *testing.T) {
 
 func TestHttpbin_Get_NotFound(t *testing.T) {
 	u, _ := url.JoinPath(httpbinEndpoint, "status", "404")
-	resp, err := httpc.NewRequest[[]byte]().Get(context.Background(), u)
+	b, err := httpc.NewRequest[[]byte]().Get(context.Background(), u)
 	assert.Error(t, err)
 	var e *httpc.Error
 	if errors.As(err, &e) {
 		assert.Equal(t, http.StatusNotFound, e.StatusCode())
 	}
-	assert.Zero(t, resp)
+	assert.Zero(t, b)
 }
 
 /////

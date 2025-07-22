@@ -1,33 +1,40 @@
 package httpc
 
-import "net/http"
+import (
+	"net/http"
+)
 
-type ResponseResult[T any] struct {
-	httpResponse *http.Response
+type HttpResult[T any] struct {
+	Response *http.Response
 
+	bytes   []byte
 	decoder DecoderFunc[T]
 }
 
-func NewResponseResult[T any](httpResponse *http.Response, decoder DecoderFunc[T]) *ResponseResult[T] {
-	return &ResponseResult[T]{
-		httpResponse: httpResponse,
-		decoder:      decoder,
+func newHttpResult[T any](response *http.Response, bytes []byte, decoder DecoderFunc[T]) *HttpResult[T] {
+	return &HttpResult[T]{
+		Response: response,
+		bytes:    bytes,
+		decoder:  decoder,
 	}
 }
 
-func (r *ResponseResult[T]) As(value any) error {
-	defer func() { _ = r.httpResponse.Body.Close() }()
-
-	d, err := r.decoder(r.httpResponse.Body)
-	if err != nil {
-		return err
-	}
-
-	p, ok := value.(*T)
-	if !ok {
+func (r *HttpResult[T]) As(value any) error {
+	switch v := value.(type) {
+	case *[]byte:
+		*v = r.bytes
+		return nil
+	case *T:
+		if r.decoder == nil {
+			return ErrNoAvailableDecoder
+		}
+		d, err := r.decoder(r.bytes)
+		if err != nil {
+			return err
+		}
+		*v = d
+		return nil
+	default:
 		return ErrUnexpectedType
 	}
-
-	*p = d
-	return nil
 }
