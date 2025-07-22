@@ -146,7 +146,20 @@ func (r *Request[T]) Query(params ...any) *Request[T] {
 }
 
 // Get HTTP GETリクエストを実行
-func (r *Request[T]) Get(ctx context.Context, u string, params ...any) (T, error) {
+func (r *Request[T]) Get(ctx context.Context, path string, params ...any) (T, error) {
+	var v T
+
+	result, err := r.TryGet(ctx, path, params...)
+	if err != nil {
+		// as zero value
+		return v, err
+	}
+	err = result.As(&v)
+	return v, err
+}
+
+// TryGet HTTP GETリクエストを実行
+func (r *Request[T]) TryGet(ctx context.Context, u string, params ...any) (Result, error) {
 	return r.DoFunc(ctx, http.MethodGet, u, "", func() (io.Reader, error) {
 		if len(params) > 0 {
 			r.Query(params...)
@@ -157,11 +170,24 @@ func (r *Request[T]) Get(ctx context.Context, u string, params ...any) (T, error
 
 // Post HTTP POSTリクエストを実行
 func (r *Request[T]) Post(ctx context.Context, u string, params any, attachments ...MultipartFormData) (T, error) {
-	var zero T
+	var v T
 
+	result, err := r.TryPost(ctx, u, params, attachments...)
+	if err != nil {
+		// as zero value
+		return v, err
+	}
+	err = result.As(&v)
+	return v, nil
+}
+
+// TryPost HTTP POSTリクエストを実行
+//
+// 返値として
+func (r *Request[T]) TryPost(ctx context.Context, u string, params any, attachments ...MultipartFormData) (Result, error) {
 	v := url.Values{}
 	if err := schema.NewEncoder().Encode(params, v); err != nil {
-		return zero, err
+		return nil, err
 	}
 
 	if len(attachments) == 0 {
@@ -176,19 +202,19 @@ func (r *Request[T]) Post(ctx context.Context, u string, params any, attachments
 		for k, vv := range v {
 			for _, v := range vv {
 				if err := mw.WriteField(k, v); err != nil {
-					return zero, err
+					return nil, err
 				}
 			}
 		}
 
 		for _, a := range attachments {
 			if err := a.AttachTo(mw); err != nil {
-				return zero, err
+				return nil, err
 			}
 		}
 
 		if err := mw.Close(); err != nil {
-			return zero, err
+			return nil, err
 		}
 
 		return r.DoFunc(ctx, http.MethodPost, u, mw.FormDataContentType(), func() (io.Reader, error) {
@@ -198,14 +224,12 @@ func (r *Request[T]) Post(ctx context.Context, u string, params any, attachments
 }
 
 // DoFunc JSONエンコードされたデータをリクエストボディに含むHTTP POSTリクエストを実行
-func (r *Request[T]) DoFunc(ctx context.Context, method, u, contentType string, payloadFunc func() (io.Reader, error)) (T, error) {
-	var zero T
-
+func (r *Request[T]) DoFunc(ctx context.Context, method, u, contentType string, payloadFunc func() (io.Reader, error)) (Result, error) {
 	r.method = method
 
 	body, err := payloadFunc()
 	if err != nil {
-		return zero, err
+		return nil, err
 	}
 
 	if method != http.MethodGet {
@@ -218,12 +242,12 @@ func (r *Request[T]) DoFunc(ctx context.Context, method, u, contentType string, 
 
 	err = r.loadURL(u)
 	if err != nil {
-		return zero, err
+		return nil, err
 	}
 
 	req, err := r.build(ctx)
 	if err != nil {
-		return zero, err
+		return nil, err
 	}
 	return r.do(req)
 }
@@ -289,9 +313,7 @@ func (r *Request[T]) build(ctx context.Context) (*http.Request, error) {
 //
 // reqはhttp.Requestを表し、respondersはレスポンスを処理するための関数のスライスです。
 // レスポンスの型Tを返し、エラーが発生した場合はエラーを返します。
-func (r *Request[T]) do(req *http.Request) (T, error) {
-	var zero T
-
+func (r *Request[T]) do(req *http.Request) (Result, error) {
 	client := r.httpClient
 	if client == nil {
 		client = http.DefaultClient
@@ -299,30 +321,27 @@ func (r *Request[T]) do(req *http.Request) (T, error) {
 
 	res, err := client.Do(req)
 	if err != nil {
-		return zero, err
+		return nil, err
 	}
 
-	defer func() { _ = res.Body.Close() }()
-
 	if res.StatusCode != http.StatusOK {
-		return zero, r.handleErrorResponse(res)
+		return nil, r.handleErrorResponse(res)
 	}
 
 	return r.handleResponse(res)
 }
 
-func (r *Request[T]) handleResponse(res *http.Response) (T, error) {
+func (r *Request[T]) handleResponse(res *http.Response) (Result, error) {
 	ct := contentType(res.Header.Get("Content-Type"))
 	decoder := r.decoders[ct]
 	if decoder == nil {
 		decoder = r.decoders[""] // default decoder
 		if decoder == nil {
-			var zero T
-			return zero, ErrNoAvailableDecoder
+			return nil, ErrNoAvailableDecoder
 		}
 	}
 
-	return decoder(res.Body)
+	return NewResponseResult[T](res, decoder), nil
 }
 
 func (r *Request[T]) handleErrorResponse(res *http.Response) error {
